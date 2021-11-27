@@ -1,0 +1,594 @@
+#+TITLE: Offer Template
+#+AUTHOR: Shair.Tech
+#+DATE: <2021-11-22 Sat>
+#+SUBTITLE: Offer Subtitle
+#+DESCRIPTION: Brief description of the document
+#+KEYWORDS: keyword1, keyword2, ...
+
+#+STARTUP: overview
+#+PRIORITIES: A D D
+#+OPTIONS: d:t
+#+OPTIONS: ':t
+#+OPTIONS: num:t
+#+OPTIONS: toc:nil
+#+OPTIONS: todo:nil
+#+OPTIONS: pri:nil
+#+TODO: NEW TODO DOING FEEDBACK | DONE CANCELED STANDBY
+#+COLUMNS: %30Item %10SCHEDULED %10DEADLINE %Effort_Working_Hours{+} %Cost{+;%.2f} %Total{+;%.2f}
+
+
+#+LATEX_COMPILER: xelatex
+#+LATEX_CLASS: article
+#+LATEX_CLASS_OPTIONS: [a4paper,11pt]
+
+#+LATEX_HEADER: \usepackage[in,headings]{fullpage}
+#+LATEX_HEADER: \usepackage[graphicx]{realboxes}
+#+LATEX_HEADER: \usepackage[utf8]{inputenc}
+#+LATEX_HEADER: %% \usepackage[italian]{babel}
+
+#+LATEX_HEADER: \setlength\parindent{0pt}
+#+LATEX_HEADER: \usepackage{fancyhdr}
+#+LATEX_HEADER: \fancyhead[R]{YOUR R-HEADER HERE}
+#+LATEX_HEADER: \fancyhead[L]{YOUR L-HEADER HERE}
+#+LATEX_HEADER: \renewcommand{\headrulewidth}{0.1mm}
+#+LATEX_HEADER: \pagestyle{plain}
+
+#+LATEX_HEADER: %% \pagestyle{myheadings}
+#+LATEX_HEADER: %% \def \@evenhead {\thepage \hfil \slshape \leftmark }#+LATEX_HEADER: %% \def \@oddhead {{\slshape \rightmark }\hfil \thepage }
+#+LATEX_HEADER: %% \usepackage{fontspec}
+#+LATEX_HEADER: %% \setmainfont{FreeSerif}
+#+LATEX_HEADER: \newenvironment{remark}{\textbf{Remark}\begin{itshape}}{\end{itshape}}
+
+#+BEAMER_HEADER: \usetheme[numbering=fraction]{metropolis}
+#+ODT_STYLES_FILE: "org-proposal-template.odt"
+
+#+BEGIN_SRC emacs-lisp :exports none :results none
+  ;; alist of team members names and rates
+  (setq hourly-rates
+        '((adolfo  . 10.00)
+          (michele . 20.00)))
+
+  ;; you can explicitly set the overhead and the profit here, as a
+  ;; percentage on top of the total amount computed for the task.
+  (setq overhead 0.20)
+  (setq profit   0.0)
+
+  ;; if we are estimating without explicitly allocating people, budget
+  ;; estimations will be computed using an average rage; the data below
+  ;; is used to compute the average rate, weighted on the ballpark effort
+  ;; allocations set below
+  (setq ballpark-effort-allocation
+        '((adolfo  . 0.30)
+          (michele . 0.70)))
+
+  ;;
+  ;; Functions to access association lists
+  ;;
+
+  (defun keys   (alist) (mapcar (lambda (x) (car x)) alist))
+  (defun values (alist) (mapcar (lambda (x) (cdr x)) alist))
+  (defun value  (key alist) (cdr (assoc key alist)))
+
+  ;;
+  ;; Computation of average and rate with overhead and profit
+  ;;
+
+  (defun avm/average-rate (hourly-rates effort-allocation)
+    "Compute the average rate, given the specified effort allocation: SUM(PROD(RATE_i, EFFORT_i))
+
+     - hourly-rates is an alist '((resource-name . rate) ...)
+     - effort-allocation is an alist '((resource-name . effort) ...)"
+    (apply '+ (mapcar (lambda (x) (* (value x hourly-rates) (value x ballpark-effort-allocation) ))
+                      (keys hourly-rates))))
+
+  (defun avm/effort-cost (effort-in-hours hourly-rate)
+    "Compute COST = Effort * Rate"
+    (* effort-in-hours hourly-rate))
+
+  ;;
+  ;; Average and Compound hourly-rates                     
+  ;;
+  ;; - Average rate is computed based on ballpark estimation of involvement
+  ;;   of Adolfo and Michele
+  ;; - Compound Rate includes overhead and profit on top of the
+  ;;   ballpark estimation (with overhead and profit given as decimal points (.20 for 20%)
+  ;;
+
+  (setq average-rate (round (avm/average-rate hourly-rates ballpark-effort-allocation)))
+  (setq compound-rate (* (+ 1.00 overhead profit) average-rate))
+
+  ;;
+  ;; Access org elements
+  ;;
+
+  (defun avm/org-get-property (key)
+    "Get the association list of property 'key' of current entry.
+
+       Notice that org-mode has all entries stored in upcase."
+    (let ( (props (org-entry-properties)) )
+      (assoc (upcase key) props)))
+
+  (defun avm/org-has-property (key)
+    "Return t if the current entry has property with key 'key'"
+    (not (equal nil (avm/org-get-property key))))
+
+  (defun avm/org-get-property-value (key)
+    "Get the value of property 'key' in current entry as a string"
+    (cdr (avm/org-get-property key)))
+
+  (defun avm/org-get-property-as-working-hours (property)
+    "Get the value of property EFFORT in current entry"
+    (avm/org-duration-string-to-working-hours (avm/org-get-property-value property)))
+
+  ;;
+  ;; Transforming Org Mode durations to working hours (8 working hours / day)
+  ;;
+  (defvar working-hours-per-effort-day 8)
+
+  (defun avm/org-duration-string-to-working-hours (duration-string)
+    (let* ( (minutes (round (org-duration-string-to-minutes duration-string)))
+            (full-days (/ minutes 1440))   ; there are, in fact, 1440 minutes per day (* 24 60)
+            (remaining (% minutes 1440)) )
+      (+ (* full-days working-hours-per-effort-day) (/ remaining 60.0))))
+
+  ;;
+  ;; We now want to support two types of effort specifications
+  ;;
+  ;; 1. UNPROFILED: we have a property EFFORT and we compute the values
+  ;; using the average hourly-rates
+  ;;
+  ;; 2. PROFILED: we have a property similar to EFFORT_xxx where xxx
+  ;; identifies a resource name in hourly-rates.  In this case we use
+  ;; the actual hourly-rates with the specific efforts.
+  ;;
+  ;; In case both are present, we use the generic entry (:EFFORT:)
+
+  (defun avm/profiled-property-name (key &optional property)
+    "Return the name of a property 'property' profiled with 'key', e.g., EFFORT_michele.
+  Property defaults to EFFORT."
+    (concat (or property "EFFORT") "_" (symbol-name key)))
+
+  (defun avm/org-get-profiled-property-value (key &optional property)
+    "Get the value of a profiled property, e.g., the value associate to EFFORT_adolfo.
+  Property defaults to EFFORT."
+    (avm/org-get-property-value (avm/profiled-property-name key property)))
+
+  (defun avm/org-get-profiled-effort-as-working-hours (key)
+    "Get the value of a profiled effort as working hours, e.g., the value associate to EFFORT_adolfo"
+    (avm/org-duration-string-to-working-hours (avm/org-get-profiled-property-value key "EFFORT")))
+
+  (defun avm/org-has-profiled-property (key &optional property)
+    "Check if the entry has a profiled entry, e.g., EFFORT_adolfo.
+  Property defaults to EFFORT."
+    (avm/org-has-property (avm/profiled-property-name key property)))
+
+  (defun avm/org-has-any-profiled-property (keys &optional property)
+    "Check whether the entry has a property suffixed with any one of the elements in keys.
+
+     - keys is a list of strings
+     - property is a string
+
+     Thus (avm/org-has-any-profiled-property '(\"adolfo\" \"michele\") \"EFFORT\") will return
+     true if there is a profiled EFFORT (that is, either EFFORT_adolfo or EFFORT_michele)."
+    (member t (mapcar (lambda (x) (avm/org-has-profiled-property x property)) keys)) )
+
+  ;;
+  ;; Compute profiled effort costs and define functions
+  ;; working on lists
+  ;;
+
+  (defun avm/profiled-effort-to-cost (key hourly-rates)
+    "Compute the cost associated to the profiled effort 'key' in an entry.
+  Given Effort_michele XX, the function looks up Michele's rate in hourly-rates and multiplies by XX."
+    (avm/effort-cost
+     (value key hourly-rates)
+     (if (avm/org-has-profiled-property key "EFFORT") (avm/org-get-profiled-effort-as-working-hours key) 0)))
+
+  (defun avm/profiled-efforts-to-costs (hourly-rates)
+    "Compute the cost associated to profiled effort of all keys in hourly-rates. 
+  Return an alist '((resource . cost) ...)"
+    (mapcar (lambda (x) (cons x (avm/profiled-effort-to-cost x hourly-rates)))
+            (keys hourly-rates)))
+
+  (defun avm/profiled-efforts-to-working-hours (hourly-rates)
+    "Compute the effort in working hours associated to all keys in hourly-rates. 
+  Return an alist '((resource . working-hours) ...)"
+    (mapcar (lambda (key) (cons key (if (avm/org-has-profiled-property key "EFFORT") (avm/org-get-profiled-effort-as-working-hours key) 0)))
+            (keys hourly-rates)))
+
+     ;;;
+     ;;; Here we do all the work: 
+     ;;;
+     ;;; - we iterate over all entries under the heading with ID plan and
+     ;;; - we add costs, overhead, profit, and total, based on hourly-rates and
+     ;;;   data in the heading
+     ;;;
+
+  (org-map-entries 
+   (lambda () 
+     (cond ((avm/org-has-property "EFFORT")
+            (let* ( (rate average-rate)
+                    (cost (avm/effort-cost (avm/org-get-property-as-working-hours "EFFORT") rate))
+                    (oh-and-p  (* cost (+ overhead profit)))
+                    (total (+ cost oh-and-p)) )
+              (org-set-property "Effort-Working-Hours" (format "%.2f" (avm/org-get-property-as-working-hours "EFFORT") ))
+              (org-set-property "Rate" (format "%.2f" rate ))
+              (org-set-property "Cost"  (format "%.2f" cost))
+              (org-set-property "Overhead-and-Profit" (format "%.2f" oh-and-p))
+              (org-set-property "Total" (format "%.2f" total))
+              ))
+
+           ((avm/org-has-any-profiled-property (keys hourly-rates) "EFFORT")
+            (let* ( (cost-alist (avm/profiled-efforts-to-costs hourly-rates))
+                    (working-hours-alist (avm/profiled-efforts-to-working-hours hourly-rates))
+                    (cost (apply '+ (mapcar 'cdr cost-alist)))
+                    (total-working-hours (apply '+ (mapcar 'cdr working-hours-alist)))
+                    (oh-and-p  (* cost (+ overhead profit)))
+                    (total (+ cost oh-and-p)) )
+              (mapcar (lambda (x) (org-set-property (avm/profiled-property-name (car x) "Effort-Working-Hours") (format "%.2f" (cdr x)))) working-hours-alist)
+              (org-set-property "Effort-Working-Hours"  (format "%.2f" total-working-hours))
+              (mapcar (lambda (x) (org-set-property (avm/profiled-property-name (car x) "Rate") (format "%.2f" (cdr x)))) hourly-rates)
+              (mapcar (lambda (x) (org-set-property (avm/profiled-property-name (car x) "Cost") (format "%.2f" (cdr x)))) cost-alist)
+              (org-set-property "Cost"  (format "%.2f" cost))
+              (org-set-property "Overhead-and-Profit" (format "%.2f" oh-and-p))
+              (org-set-property "Total" (format "%.2f" total))
+              ))
+           ))
+   nil
+   'file)
+#+end_src
+
+#+LATEX: \pagestyle{fancy}
+
+* Document Versions                                                :noexport:
+ 
+  |------------------+---------------|
+  | Date             | Comment       |
+  |------------------+---------------|
+  | <2020-02-15 Sat> | First Version |
+  |------------------+---------------|
+
+* Project Data                                                     :noexport:
+
+  #+NAME: project_data
+  | Name              | My Fancy Project name |
+  | Acronym           |             project-1 |
+  | Start Data        |            2022-01-01 |
+  | Duration (months) |                     2 |
+
+* Context
+
+  Information necessary to put the project in context: pre-existing
+  environments and tools, constraints, opportunities.
+
+* Goals and Expected Results
+
+  - What do we want to achieve?
+  - What will we achieve in the project?
+
+* Functional Groups and Functions
+  :PROPERTIES:
+  :ID:       plan
+  :END:
+
+  All todo items here contribute to the project budget if they have an
+  effort property set.  Effort can either be generic (meaning any
+  resource might work on the task; the average rate will be used) or
+  specific, if using properties such as =EFFORT_<resource_name>=.
+
+  *Remarks*
+
+  - Use durations expressed in timing units (e.g., 4d, 10:10); plain numbers
+    are interpreted as minutes
+  - Use either profiled or plain efforts; if an entry contains both, the plain
+    effort entry is used.
+  
+** User Story 1
+*** Task 1.1
+    SCHEDULED: <2022-01-01 Mon> DEADLINE: <2022-02-22 Mon>
+    :PROPERTIES:
+    :Effort:   60
+    :Effort-Working-Hours: 1.00
+    :Rate:     17.00
+    :Cost:     17.00
+    :Overhead-and-Profit: 3.40
+    :Total:    20.40
+    :END:
+    
+    In this task we will do such and such ...
+
+*** TODO Task 1.2
+    SCHEDULED: <2022-01-01 Mon> DEADLINE: <2022-05-22 Mon>
+    :PROPERTIES:
+    :Effort_adolfo:  10d
+    :Effort_michele: 20d
+    :Effort-Working-Hours_adolfo: 80.00
+    :Effort-Working-Hours_michele: 160.00
+    :Effort-Working-Hours: 240.00
+    :Rate_adolfo: 10.00
+    :Rate_michele: 20.00
+    :Cost_adolfo: 800.00
+    :Cost_michele: 3200.00
+    :Cost:     4000.00
+    :Overhead-and-Profit: 800.00
+    :Total:    4800.00
+    :END:
+
+    In this other task we will do such and such ...
+
+*** Task 1.3
+    :PROPERTIES:
+    :Effort_michele:   1m
+    :Effort-Working-Hours_adolfo: 0.00
+    :Effort-Working-Hours_michele: 240.00
+    :Effort-Working-Hours: 240.00
+    :Rate_adolfo: 10.00
+    :Rate_michele: 20.00
+    :Cost_adolfo: 0.00
+    :Cost_michele: 4800.00
+    :Cost:     4800.00
+    :Overhead-and-Profit: 960.00
+    :Total:    5760.00
+    :END:
+
+    In this task we will do such and such ...
+
+
+* Timing
+
+  This has to be filled by hand.  In the future it might be interesting to
+  try and integrate with a (Gantt) charting tool, such as Vega light or
+  Task Juggler.
+
+* Plan and Budget by Item                                          :noexport:
+
+  This section provides an overview of the todo items, together with deadline
+  sand project costs.
+
+  We also have a column to count actual time, although we prefer to do the
+  clocking on a different file (to keep things a bit tidier).
+
+  #+BEGIN: columnview :maxlevel 3 :id plan :indent t 
+  #+END:
+
+* Budget
+
+  Budget rows have to be inserted by hand.  VAT and Total are computed.  In
+  our experience the data computed from todos need some adjustments/grouping
+  to make it into the budget.
+
+  You can use the previous (Budget by Item) or the last section (Budget
+  Detailed Data) of this document to get summary data and put it in the
+  budget.
+  
+  #+NAME: budget_table
+  | ! | Cost Item          |     Cost |
+  |---+--------------------+----------|
+  |   | Group 1            |    10500 |
+  |---+--------------------+----------|
+  |   | Total (Before VAT) | 10500.00 |
+  |---+--------------------+----------|
+  |   | VAT                |  2310.00 |
+  |   | Total (with VAT)   | 12810.00 |
+  |---+--------------------+----------|
+  #+TBLFM: @>>>$3 =vsum(@2..@>>>>);%.2f
+  #+TBLFM: @>>$3 = 0.22 * @-1;%.2f
+  #+TBLFM: @>$3 = @-1 + @-2;%.2f
+
+* Payments Structure
+
+  Set the first two columns of this table and the other columns will
+  be computed for you.
+
+  #+NAME: payments_structure
+  | Date       | Amount |     Net |     VAT | Payment |
+  |------------+--------+---------+---------+---------|
+  | 01/03/2022 |    50% | 5250.00 | 1155.00 | 6405.00 |
+  | 21/06/2022 |    10% | 1050.00 |  231.00 | 1281.00 |
+  | 21/11/2022 |    40% | 4200.00 |  924.00 | 5124.00 |
+  |------------+--------+---------+---------+---------|
+  #+TBLFM: $3 = $2 * remote(budget_table, remote(budget_table, @>>>$3) ; %.2f
+  #+TBLFM: $4 = 0.22 * $3 ; %.2f
+  #+TBLFM: $5 = $3 + $4 ; %.2f
+
+* Integrating with h-ledger                                        :noexport:
+
+This section generates the plain-text accounting data we use with hledger.
+Project accounting is structure as follows:
+
+- The project budget is split in equal parts for the duration of the project
+- Each month we transfer from =revenues= to =accrued_work=
+- When we get paid, we move from =accrued_work= to the =bank= account and we
+  account for VAT
+
+This works on the assumption that the project is paid for with a flat fee.  If
+you are charging by time and expense, the data below should become the project
+budget and the valorization should be computed on the actual hours worked.
+
+#+begin_src emacs-lisp :var data = project_data :var table = payments_structure :results output :wrap CODE
+  (setq project-name    (nth 1 (nth 0 data)))
+  (setq project-acronym (nth 1 (nth 1 data)))
+  (setq start-date      (nth 1 (nth 2 data)))
+  (setq months          (nth 1 (nth 3 data)))
+
+  ;; computed from the table, sum of net values
+  (setq amount (apply '+ (mapcar (lambda (x) (nth 2 x)) (cdr table))))
+
+  (defun avm/build-date (string)
+    (mapcar 'string-to-number
+            (list (substring string 0 4) (substring string 5 7) (substring string 8 10))))
+
+  (defun avm/emit-date (date)
+    (format "%4d-%02d-%02d" (nth 0 date) (nth 1 date) (nth 2 date)))
+
+  (defun avm/add-one-month (date)
+    (let ( (year (car date))
+           (month (cadr date))
+           (day (caddr date)) )
+      (let ( (new-month (+ month 1)) )
+        (if (> new-month 12)
+            (list (+ year 1) 1 day)
+          (list year new-month day)))))
+
+  (defun avm/emit-accrued-work-entry (date project acronym amount)
+    (format "%s ! %s\n  %s\n  %-30s %10.2f\n  %-30s\n\n"
+            date
+            project
+            (concat "; project:" project-acronym)
+            "accrued_work"
+            amount
+            (concat "revenues:" (downcase project-acronym))))
+
+  (defun avm/emit-project (date project acronym total-amount months)
+    (let* ( (date (avm/build-date date))
+            (amount (/ total-amount months))
+            (remainder (- total-amount (* amount months))) )
+      (avm/emit-project-ll date project acronym amount remainder months)))
+
+  (defun avm/emit-project-ll (date project acronym amount remainder months)
+    (if (> months 1)
+        (concat
+         (avm/emit-accrued-work-entry (avm/emit-date date) project acronym amount)
+         (avm/emit-project-ll (avm/add-one-month date) project acronym amount remainder (- months 1)))
+      (avm/emit-accrued-work-entry (avm/emit-date date) project acronym (+ amount remainder))))
+
+  (defun avm/invert-date (date)
+    (concat (substring date 6 10) "-" (substring date 3 5) "-" (substring date 0 2)))
+
+  (defun avm/print-ledger-entry (row)
+    (let ( (date  (nth 0 row)) 
+           (net   (nth 2 row))
+           (vat   (nth 3 row))
+           (gross (nth 4 row)) )
+      (format
+       "%s ! %s\n  %s\n  %-30s %10.2f\n  %-30s %10.2f\n  %-30s %10.2f\n\n"
+       (avm/invert-date date)
+       project-name
+       (concat "; project:" project-acronym)
+       "bank"
+       gross
+       "credits:vat"
+       (* -1 vat)
+       (concat "accrued_work:" (downcase project-acronym))
+       (* -1 net))))
+
+  ;; this emits the accrued work
+  (princ (avm/emit-project start-date project-name project-acronym amount months))
+
+  ;; this emits the payments
+  (mapcar 'princ (mapcar 'avm/print-ledger-entry (cdr table)))
+#+end_src
+
+#+RESULTS:
+#+begin_CODE
+2022-01-01 ! My Fancy Project name
+  ; project:project-1
+  accrued_work                      5250.00
+  revenues:project-1            
+
+2022-02-01 ! My Fancy Project name
+  ; project:project-1
+  accrued_work                      5250.00
+  revenues:project-1            
+
+2022-03-01 ! My Fancy Project name
+  ; project:project-1
+  bank                              6405.00
+  credits:vat                      -1155.00
+  accrued_work:project-1           -5250.00
+
+2022-06-21 ! My Fancy Project name
+  ; project:project-1
+  bank                              1281.00
+  credits:vat                       -231.00
+  accrued_work:project-1           -1050.00
+
+2022-11-21 ! My Fancy Project name
+  ; project:project-1
+  bank                              5124.00
+  credits:vat                       -924.00
+  accrued_work:project-1           -4200.00
+
+#+end_CODE
+
+* Additional Conditions
+* Risks Management
+
+| Risk | Probability | Impact | Action Reference |
+|------+-------------+--------+------------------|
+|      |             |        |                  |
+
+* Company/Professional Profile
+
+##+INCLUDE: company_profile.org
+
+* Budget Detailed Data                                             :noexport:
+
+*** Budget by functional group
+
+#+BEGIN: columnview :maxlevel 2 :id plan :indent t 
+| ITEM            | EFFORT | COST | TOTAL |
+|-----------------+--------+------+-------|
+| Piano di lavoro |        | 0.00 |  0.00 |
+#+END:
+
+*** Budget by activity
+
+ #+BEGIN: columnview :id plan :indent t :maxlevel 2
+ | ITEM            | EFFORT | COST | TOTAL |
+ |-----------------+--------+------+-------|
+ | Piano di lavoro |        | 0.00 |  0.00 |
+ #+END:
+
+*** Budget by priority
+
+ Independent of the functional group.
+
+ #+BEGIN_SRC emacs-lisp :exports results :results value table
+   (mapcar
+    (lambda (priority) 
+      (list priority
+            (format "EUR %8.2f"
+                    (apply '+
+                           (org-map-entries  
+                            (lambda () 
+                              (if (equal (avm/org-get-property-value "PRIORITY") priority)
+                                  (av/org-get-property-value-as-number "COST")
+                                0.00))
+                            nil 'file)))))
+    '("A" "B" "C"))
+ #+end_src
+
+ #+RESULTS:
+ | A | EUR     0.00 |
+ | B | EUR     0.00 |
+ | C | EUR     0.00 |
+
+*** Priority A
+
+ #+BEGIN: columnview :id plan :indent t :match "PRIORITY=\"A\""
+ | ITEM | EFFORT | COST | TOTAL |
+ |------+--------+------+-------|
+ #+END:
+
+*** Priority B
+
+ #+BEGIN: columnview :id plan :indent t :match "PRIORITY=\"B\""
+ | ITEM | EFFORT | COST | TOTAL |
+ |------+--------+------+-------|
+ #+END:
+
+*** Priority C
+
+ #+BEGIN: columnview :id plan :indent t :match "PRIORITY=\"C\""
+ | ITEM | EFFORT | COST | TOTAL |
+ |------+--------+------+-------|
+ #+END:
+
+** Local Variables                                                 :noexport:
+
+# Local Variables:
+# org-confirm-babel-evaluate: nil
+# End:
+
+
